@@ -1,23 +1,31 @@
 package com.eximbay.payoutbatch.job;
 
-import com.eximbay.payoutbatch.job.dto.PayoutDto;
-import com.eximbay.payoutbatch.job.repository.PayoutRepository;
+import com.eximbay.payoutbatch.dto.PayoutDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.Job;
+import org.springframework.batch.core.JobExecution;
+import org.springframework.batch.core.JobExecutionListener;
 import org.springframework.batch.core.Step;
 import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.JobScope;
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
-import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.item.ItemReader;
 import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.batch.item.file.FlatFileItemWriter;
+import org.springframework.batch.item.file.builder.FlatFileItemWriterBuilder;
+import org.springframework.batch.item.file.transform.PassThroughLineAggregator;
+import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import javax.sql.DataSource;
 
 @Slf4j
 @Configuration
@@ -28,8 +36,9 @@ public class PayoutJob {
     private final JobBuilderFactory jobBuilderFactory;
     private final StepBuilderFactory stepBuilderFactory;
 
-    @Autowired
-    PayoutRepository payoutRepository;
+    // DB 처리
+    private final JdbcTemplate jdbcTemplate;
+    private final DataSource dataSource;
 
     /// Constructor
 
@@ -47,60 +56,163 @@ public class PayoutJob {
 
             Q. 실패건 재처리는 어떻게?
         */
-        return jobBuilderFactory.get("payoutJob")
+        return jobBuilderFactory.get("payoutJobMain")
+                .listener(new JobExecutionListener() {
+                    @Override
+                    public void beforeJob(JobExecution jobExecution) {
+                        log.info(" >>> Job 실행 전 수행");
+
+                        // 테스트를 위한 더미 데이터 생성
+                        StringBuilder sb = new StringBuilder();
+
+//                        sb.append(" create table payout_ledgar ( ");
+//                        sb.append("     PAYOUT_DATE VARCHAR(8),  ");
+//                        sb.append("     TRANSACTION_TYPE VARCHAR(8),  ");
+//                        sb.append(" 	STATUS       VARCHAR(50) ");
+//                        sb.append(" ); ");
+
+                        sb.append("INSERT INTO payout_ledgar VALUES ('20220613', 'PAYOUT', 'REQUESTED');");
+                        sb.append("INSERT INTO payout_ledgar VALUES ('20220612', 'PAYOUT', 'COMPLETED');");
+                        sb.append("INSERT INTO payout_ledgar VALUES ('20220612', 'PAYOUT', 'REQUESTED');");
+
+                        sb.append("INSERT INTO payout_ledgar VALUES ('20220612', 'REFUND', 'REQUESTED');");
+                        sb.append("INSERT INTO payout_ledgar VALUES ('20220612', 'REFUND', 'REQUESTED');");
+                        sb.append("INSERT INTO payout_ledgar VALUES ('20220612', 'REFUND', 'REQUESTED');");
+
+                        jdbcTemplate.execute(sb.toString()); // query 실행
+
+                    }
+
+                    @Override
+                    public void afterJob(JobExecution jobExecution) {
+                        log.info(" >>> Job 실행 후 수행");
+                    }
+                })
                 .start(getRemitDataStep())
-                .next(sendFirmBanking())
+                    .on("COMPLETED")
+                    .to(sendFirmBanking())
+                        // .next(sendCallBack())
+                .from(getRemitDataStep())
+                    .on("*")
+                    .end()
+                .end()
                 .build();
     }
 
+    // STEP 1.
     @Bean
     @JobScope
     public Step getRemitDataStep(){
-        System.out.println(" IN PAYOUT JOB");
-
-        return stepBuilderFactory.get("dbToFileStep")
+        return stepBuilderFactory.get("getRemitDataStep")
                 .<PayoutDto, String>chunk(10) // chunckSize
-                .reader(getRemit(null))
+                .reader(getRemitData(null))
                 .processor(validationData())
+                .writer(makeFileStepWriter())
                 .build();
 
     }
-    // 2-1. DB에 접근하여 chunkSize만큼 paging하여 data를 read
+    // STEP 1-1.
     @Bean
-    @StepScope
-    public JdbcCursorItemReader<PayoutDto> getRemit(@Value("#{jobParameters[payoutDate]}") String payoutDate) {
+    @JobScope
+    public JdbcCursorItemReader<PayoutDto> getRemitData(@Value("#{jobParameters[payoutDate]}") String payoutDate) {
 
-        // replace jpa
-        String sql = "select * from card_ledger where REQUEST_DATE = ? ; ";
+        log.debug("payoutDate : " + payoutDate);
+        String sql = "select * from payout_ledgar where PAYOUT_DATE = ? ; ";
 
         return new JdbcCursorItemReaderBuilder<PayoutDto>()
-                .fetchSize(10)                                      	// chunk size
+                .fetchSize(10) // chunk size
+                .dataSource(dataSource)
                 .rowMapper(new BeanPropertyRowMapper<>(PayoutDto.class)) // DTO(DbToFileDTO)에 결과 레코드가 매핑된다.
-                .sql(sql)												// sql query
-                .queryArguments(payoutDate) 	   						// query parameter
+                .sql(sql) // sql query
+                .queryArguments(payoutDate) // query parameter
                 .name("jdbcCursorItemReader")
                 .build();
     }
 
-    // 2-2. read한 data를 원하는 형태에 맞게 가공
+    // STEP 1-2.
     @Bean
-    public ItemProcessor<PayoutDto, String> dbToFileStepProcessor() {
-
-        return dbToFileDTO -> {
-            // 원하는 형태에 맞게 가공
-            return "[ DB 조회 결과 : " + dbToFileDTO.toString() + " ]";
-        };
-    }
-
     public ItemProcessor<PayoutDto, String> validationData() {
 
-        return null;
+        return payoutDto -> "[ DB 조회 결과 : " + payoutDto + " ]";
     }
 
+    // STEP 1-3.
+    @Bean
+    public FlatFileItemWriter<String>  makeFileStepWriter() {
+
+        String filename = "temp";
+
+        return new FlatFileItemWriterBuilder<String>()
+                .name("flatFileItemWriter")
+                .resource(new FileSystemResource("./file/"+filename))
+                .lineAggregator(new PassThroughLineAggregator<>())
+                .build();
+
+    }
+
+    // STEP 2
+    @Bean
     public Step sendFirmBanking() {
 
-        return null;
+        return stepBuilderFactory.get("sendFirmBanking")
+                .tasklet((stepContribution, chunkContext) -> {
 
+                    log.info(">>> sendFirmBanking");
+
+                    // 서버 정보 가져오기.
+
+                    // 전문 생성 하기
+
+                    // 전송하기
+
+                    return RepeatStatus.FINISHED;
+                })
+                .build();
     }
+
+//    @Bean
+//    public Step sendCallBack() {
+//        return stepBuilderFactory.get("sendCallBack")
+//                .<PayoutDto, String>chunk(10) // chunckSize
+//                .reader(getCallBackInfo(null))
+//                .processor(sendCallBackToMerchant())
+//                // .writer(sendResultWriter())
+//                .build();
+//    }
+
+    @Bean
+    @JobScope
+    public ItemReader<? extends PayoutDto> getCallBackInfo(@Value("#{jobParameters[payoutDate]}") String payoutDate) {
+
+        // get CallBack Info
+        String sql = "select * from PAYOUT_LEDGAR where PAYOUT_DATE = ? ; ";
+
+        return new JdbcCursorItemReaderBuilder<PayoutDto>()
+                .fetchSize(10) // chunk size
+                .dataSource(dataSource)
+                .rowMapper(new BeanPropertyRowMapper<>(PayoutDto.class)) // DTO(DbToFileDTO)에 결과 레코드가 매핑된다.
+                .sql(sql) // sql query
+                .queryArguments(payoutDate) // query parameter
+                .name("jdbcCursorItemReader")
+                .build();
+    }
+
+    @Bean
+    public ItemProcessor<PayoutDto, String> sendCallBackToMerchant() {
+
+        return payoutDto -> "[ DB 조회 결과 : " + payoutDto + " ]";
+    }
+
+//    @Bean
+//    public FlatFileItemWriter<PayoutDto> sendResultWriter() {
+//
+//        String sql = "UPDATE payout_ledger SET `STATUS` = 'COMPLETE' WHERE :payoutDate";
+//
+//        return new FlatFileItemWriterBuilder<PayoutDto>()
+//                .dataSource(dataSource)
+//                .sql(sql)
+//                .beanMapped()
+//                .build();
+//    }
 
 }
