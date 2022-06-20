@@ -14,6 +14,7 @@ import org.springframework.batch.item.ItemProcessor;
 import org.springframework.batch.item.ItemReader;
 import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
+import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.FlatFileItemWriter;
 import org.springframework.batch.item.file.builder.FlatFileItemWriterBuilder;
 import org.springframework.batch.item.file.transform.PassThroughLineAggregator;
@@ -116,10 +117,9 @@ public class PayoutJob {
     @JobScope
     public JdbcCursorItemReader<PayoutDto> getRemitData(@Value("#{jobParameters[payoutDate]}") String payoutDate) {
 
-        log.debug("payoutDate : " + payoutDate);
-        String sql = "select * from payout_ledgar where PAYOUT_DATE = ? ; ";
+        String sql = "SELECT * FROM payout_ledgar WHERE PAYOUT_DATE = ? ; ";
 
-        return new JdbcCursorItemReaderBuilder<PayoutDto>()
+        JdbcCursorItemReader<PayoutDto> jdbcCursorItemReader = new JdbcCursorItemReaderBuilder<PayoutDto>()
                 .fetchSize(10) // chunk size
                 .dataSource(dataSource)
                 .rowMapper(new BeanPropertyRowMapper<>(PayoutDto.class)) // DTO(DbToFileDTO)에 결과 레코드가 매핑된다.
@@ -127,20 +127,28 @@ public class PayoutJob {
                 .queryArguments(payoutDate) // query parameter
                 .name("jdbcCursorItemReader")
                 .build();
+
+        return jdbcCursorItemReader;
     }
 
     // STEP 1-2.
     @Bean
     public ItemProcessor<PayoutDto, String> validationData() {
 
-        return payoutDto -> "[ DB 조회 결과 : " + payoutDto + " ]";
+        log.info(">>> in validationData");
+
+        return payoutDto -> {
+            log.info(payoutDto.toString());
+            return "[ DB 조회 결과 : " + payoutDto.toString() + " ]";
+        };
     }
 
     // STEP 1-3.
     @Bean
-    public FlatFileItemWriter<String>  makeFileStepWriter() {
+    public FlatFileItemWriter<String> makeFileStepWriter() {
 
-        String filename = "temp";
+        String filename = "temp.txt";
+
 
         return new FlatFileItemWriterBuilder<String>()
                 .name("flatFileItemWriter")

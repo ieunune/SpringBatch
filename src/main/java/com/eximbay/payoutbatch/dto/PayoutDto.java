@@ -10,7 +10,7 @@ import lombok.ToString;
 @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
 @ToString
 public class PayoutDto {
-
+    
     private String payoutDate;
     private String transactionType;
     private String status;
