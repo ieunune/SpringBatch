@@ -2,7 +2,7 @@
 
 스프링 배치 프로젝트 설계 진행 중.
 
-기술스택 : Spring Batch + Spring Scheduler + JPA 
+기술스택 : Spring Batch + CronTable
 
 Meta Table DDL
 ``` sql
